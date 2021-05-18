@@ -68,9 +68,10 @@ void mesh_display()
 	timer.update();
 	float const t = timer.t;
 
-	// stegosaurus.transform.translate = {1,0,0};
-	horse.transform.translate = {0,0,0};
-	horse.transform.rotate = rotation({0,0,1}, 0.7+0.5*std::sin(2*3.14f*(t-0.4f)) );
+	//horse.
+	horse.transform.translate = {-1.f,-1.2f,0.f};
+	horse.transform.scale = 0.1f;
+	horse.transform.rotate = rotation({0,0,1}, 0.3*std::sin(2*3.14f*(t-0.4f)) );
 	draw(horse, scene);
 	// draw(stegosaurus, scene);
 
