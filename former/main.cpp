@@ -1,16 +1,14 @@
 #include "vcl/vcl.hpp"
 #include <iostream>
-#include <list>
 
 #include "terrain.hpp"
-#include "carriere.hpp"
 #include "tree.hpp"
 
 using namespace vcl;
 
 struct gui_parameters {
 	bool display_frame = true;
-	bool wireframe = false;
+	bool add_sphere = true;
 };
 
 struct user_interaction_parameters {
@@ -20,6 +18,7 @@ struct user_interaction_parameters {
 	gui_parameters gui;
 	bool cursor_on_gui;
 };
+
 user_interaction_parameters user;
 
 struct scene_environment
@@ -32,76 +31,122 @@ scene_environment scene;
 perlin_noise_parameters parameters;
 
 
-
-
 void mouse_move_callback(GLFWwindow* window, double xpos, double ypos);
 void window_size_callback(GLFWwindow* window, int width, int height);
 
 void initialize_data();
+void display_scene();
 void display_interface();
 
-
-
-mesh_drawable horse;
-mesh carriere;
-mesh_drawable carriere_visual;
 mesh terrain;
 mesh_drawable terrain_visual;
 mesh_drawable tree;
 mesh_drawable mushroom;
 mesh_drawable billboard_grass;
-// mesh_drawable stegosaurus;
-
-timer_interval timer;
 
 std::vector<vcl::vec3> tree_position = generate_positions_on_terrain(50);
 std::vector<vcl::vec3> mush_position = generate_positions_on_terrain(50);
 std::vector<vcl::vec3> grass_position = generate_positions_on_terrain(60);
 
-
-void mesh_load()
+int main(int, char* argv[])
 {
-	// mesh_load_file_obj parse an obj file and returns a mesh structure
-	horse = mesh_drawable( mesh_load_file_obj("assets/run.obj"));
-	horse.texture = opengl_texture_to_gpu( image_load_png("assets/horseBody_default_high.png") );
+	std::cout << "Run " << argv[0] << std::endl;
 
-	// If the mesh has uv coordinates (must be defined in the file), then we can use a texture image (corresponding to the uv-coordinates)
-	// stegosaurus = mesh_drawable( mesh_load_file_obj("assets/stegosaurus.obj"));
-	// stegosaurus.texture = opengl_texture_to_gpu( image_load_png("assets/stegosaurus.png") );
+	int const width = 1280, height = 1024;
+	GLFWwindow* window = create_window(width, height);
+	window_size_callback(window, width, height);
+	std::cout << opengl_info_display() << std::endl;;
 
-
-	/* Notes:
-	* 
-	* - The mesh_load_file_obj follows a simple approach assuming the file contains a single object and returns a single mesh structure.
-	* - If you need to store multiple shapes (with multiple textures, etc.) you should either 
-	*       - split it into several obj files 
-	*       - or use an external parser library such as tinyobjloader for instance.
-	* - .mtl files are not read - so you need to set your shading and texture file manually
-	* 
-	*/
-}
-
-void mesh_display()
-{
-	timer.update();
-	float const t = timer.t;
-
-	horse.transform.translate = {-1.f,-1.2f,0.f};
-	horse.transform.scale = 0.1f;
+	imgui_init(window);
+	glfwSetCursorPosCallback(window, mouse_move_callback);
+	glfwSetWindowSizeCallback(window, window_size_callback);
 	
-	rotation R1 = rotation({1,0,0}, pi/2);
-	rotation R2 = rotation({0,0,1}, 0.3*std::sin(2*3.14f*(t-0.4f)) );
-	
-	horse.transform.rotate = R1*R2;
-	
-	draw(horse, scene);
-	// draw(stegosaurus, scene);
+	std::cout<<"Initialize data ..."<<std::endl;
+	initialize_data();
 
-	if (user.gui.wireframe) {
-		draw_wireframe(horse, scene);
-		// draw_wireframe(stegosaurus, scene);
+
+	std::cout<<"Start animation loop ..."<<std::endl;
+	user.fps_record.start();
+	glEnable(GL_DEPTH_TEST);
+	while (!glfwWindowShouldClose(window))
+	{
+		scene.light = scene.camera.position();
+		user.fps_record.update();
+		
+		glClearColor(1.0f, 1.0f, 1.0f, 1.0f);
+		glClear(GL_COLOR_BUFFER_BIT);
+		glClear(GL_DEPTH_BUFFER_BIT);
+		imgui_create_frame();
+		if(user.fps_record.event) {
+			std::string const title = "VCL Display - "+str(user.fps_record.fps)+" fps";
+			glfwSetWindowTitle(window, title.c_str());
+		}
+
+		ImGui::Begin("GUI",NULL,ImGuiWindowFlags_AlwaysAutoResize);
+		user.cursor_on_gui = ImGui::IsAnyWindowFocused();
+
+		if(user.gui.display_frame) draw(user.global_frame, scene);
+
+		display_interface();
+		display_scene();
+
+		ImGui::End();
+		imgui_render_frame(window);
+		glfwSwapBuffers(window);
+		glfwPollEvents();
 	}
 
+	imgui_cleanup();
+	glfwDestroyWindow(window);
+	glfwTerminate();
+
+	return 0;
+}
+
+
+
+void initialize_data()
+{
+	GLuint const shader_mesh = opengl_create_shader_program(opengl_shader_preset("mesh_vertex"), opengl_shader_preset("mesh_fragment"));
+	GLuint const shader_uniform_color = opengl_create_shader_program(opengl_shader_preset("single_color_vertex"), opengl_shader_preset("single_color_fragment"));
+	GLuint const texture_white = opengl_texture_to_gpu(image_raw{1,1,image_color_type::rgba,{255,255,255,255}});
+	mesh_drawable::default_shader = shader_mesh;
+	mesh_drawable::default_texture = texture_white;
+	curve_drawable::default_shader = shader_uniform_color;
+	segments_drawable::default_shader = shader_uniform_color;
+	
+	user.global_frame = mesh_drawable(mesh_primitive_frame());
+	user.gui.display_frame = false;
+	scene.camera.distance_to_center = 2.5f;
+	scene.camera.look_at({4,3,2}, {0,0,0}, {0,0,1});
+
+    // Create visual terrain surface
+	terrain = create_terrain();
+    terrain_visual = mesh_drawable(terrain);
+	update_terrain(terrain, terrain_visual, parameters);
+    //terrain.shading.color = {0.6f,0.85f,0.5f};
+	image_raw im = image_load_png("../02a_textures/assets/texture_grass.png");
+
+	GLuint texture_image_id = opengl_texture_to_gpu(im, 
+		GL_MIRRORED_REPEAT /**GL_TEXTURE_WRAP_S*/, 
+		GL_MIRRORED_REPEAT /**GL_TEXTURE_WRAP_T*/);
+	terrain_visual.texture = texture_image_id;
+    terrain_visual.shading.phong.specular = 0.0f; // non-specular terrain material
+
+	tree = mesh_drawable(create_tree());
+
+	mushroom = mesh_drawable(create_mushroom());
+
+	billboard_grass = mesh_drawable(mesh_primitive_quadrangle());
+	billboard_grass.transform.scale = 0.4f;
+	billboard_grass.transform.translate = {0.5f, 0.5f, 0.0f};
+	billboard_grass.texture = opengl_texture_to_gpu(image_load_png("../02c_billboards/assets/grass.png"));
+
+}
+
+
+void display_scene()
+{
 	draw(terrain_visual, scene);
 	//draw_wireframe(terrain, scene);
 
@@ -149,115 +194,9 @@ void mesh_display()
 }
 
 
-
-int main(int, char* argv[])
-{
-	std::cout << "Run " << argv[0] << std::endl;
-
-	int const width = 1280, height = 1024;
-	GLFWwindow* window = create_window(width, height);
-	window_size_callback(window, width, height);
-	std::cout << opengl_info_display() << std::endl;;
-
-	imgui_init(window);
-	glfwSetCursorPosCallback(window, mouse_move_callback);
-	glfwSetWindowSizeCallback(window, window_size_callback);
-	
-	std::cout<<"Initialize data ..."<<std::endl;
-	initialize_data();
-
-	std::cout<<"Start animation loop ..."<<std::endl;
-	user.fps_record.start();
-	glEnable(GL_DEPTH_TEST);
-	while (!glfwWindowShouldClose(window))
-	{
-		scene.light = scene.camera.position();
-		user.fps_record.update();
-		
-		glClearColor(1.0f, 1.0f, 1.0f, 1.0f);
-		glClear(GL_COLOR_BUFFER_BIT);
-		glClear(GL_DEPTH_BUFFER_BIT);
-		imgui_create_frame();
-		if(user.fps_record.event) {
-			std::string const title = "VCL Display - "+str(user.fps_record.fps)+" fps";
-			glfwSetWindowTitle(window, title.c_str());
-		}
-
-		ImGui::Begin("GUI",NULL,ImGuiWindowFlags_AlwaysAutoResize);
-		user.cursor_on_gui = ImGui::GetIO().WantCaptureMouse;
-
-		if(user.gui.display_frame) draw(user.global_frame, scene);
-
-		display_interface();
-		mesh_display();
-
-
-		ImGui::End();
-		imgui_render_frame(window);
-		glfwSwapBuffers(window);
-		glfwPollEvents();
-	}
-
-	imgui_cleanup();
-	glfwDestroyWindow(window);
-	glfwTerminate();
-
-	return 0;
-}
-
-void initialize_data()
-{
-	GLuint const shader_mesh = opengl_create_shader_program(opengl_shader_preset("mesh_vertex"), opengl_shader_preset("mesh_fragment"));
-	GLuint const shader_uniform_color = opengl_create_shader_program(opengl_shader_preset("single_color_vertex"), opengl_shader_preset("single_color_fragment"));
-	GLuint const texture_white = opengl_texture_to_gpu(image_raw{1,1,image_color_type::rgba,{255,255,255,255}});
-	mesh_drawable::default_shader = shader_mesh;
-	mesh_drawable::default_texture = texture_white;
-	curve_drawable::default_shader = shader_uniform_color;
-	segments_drawable::default_shader = shader_uniform_color;
-	
-	user.global_frame = mesh_drawable(mesh_primitive_frame());
-	user.gui.display_frame = false;
-	scene.camera.distance_to_center = 2.5f;
-	scene.camera.look_at({4,3,2}, {0,0,0}, {0,0,1});
-	// scene.camera.distance_to_center = 10.0f;
-	// scene.camera.look_at({3,1,2}, {0,0,0.5}, {0,0,1});
-
-	// Create visual terrain surface
-	terrain = create_terrain();
-    terrain_visual = mesh_drawable(terrain);
-	update_terrain(terrain, terrain_visual, parameters);
-    //terrain.shading.color = {0.6f,0.85f,0.5f};
-	image_raw im = image_load_png("assets/texture_grass.png");
-
-	GLuint texture_image_id = opengl_texture_to_gpu(im, 
-		GL_MIRRORED_REPEAT /**GL_TEXTURE_WRAP_S*/, 
-		GL_MIRRORED_REPEAT /**GL_TEXTURE_WRAP_T*/);
-	terrain_visual.texture = texture_image_id;
-    terrain_visual.shading.phong.specular = 0.0f; // non-specular terrain material
-
-	//Create carrière
-	carriere = create_carriere();
-	carriere_visual = mesh_drawable(carriere);
-
-
-	tree = mesh_drawable(create_tree());
-
-	mushroom = mesh_drawable(create_mushroom());
-
-	billboard_grass = mesh_drawable(mesh_primitive_quadrangle());
-	billboard_grass.transform.scale = 0.4f;
-	billboard_grass.transform.translate = {0.5f, 0.5f, 0.0f};
-	billboard_grass.texture = opengl_texture_to_gpu(image_load_png("assets/grass.png"));
-
-	mesh_load();
-}
-
-
-
 void display_interface()
 {
 	ImGui::Checkbox("Frame", &user.gui.display_frame);
-	ImGui::Checkbox("Wireframe", &user.gui.wireframe);
 
 	bool update = false;
 	update |= ImGui::SliderFloat("Persistance", &parameters.persistency, 0.1f, 0.6f);
@@ -267,7 +206,6 @@ void display_interface()
 
 	if(update)// if any slider has been changed - then update the terrain
 		update_terrain(terrain, terrain_visual, parameters);
-
 }
 
 
@@ -285,7 +223,6 @@ void mouse_move_callback(GLFWwindow* window, double xpos, double ypos)
 	vec2 const& p0 = user.mouse_prev;
 	glfw_state state = glfw_current_state(window);
 
-
 	auto& camera = scene.camera;
 	if(!user.cursor_on_gui){
 		if(state.mouse_click_left && !state.key_ctrl)
@@ -302,8 +239,8 @@ void mouse_move_callback(GLFWwindow* window, double xpos, double ypos)
 void opengl_uniform(GLuint shader, scene_environment const& current_scene)
 {
 	opengl_uniform(shader, "projection", current_scene.projection);
-	opengl_uniform(shader, "view", current_scene.camera.matrix_view());
-	opengl_uniform(shader, "light", current_scene.light, false);
+	opengl_uniform(shader, "view", scene.camera.matrix_view());
+	opengl_uniform(shader, "light", scene.light, false);
 }
 
 
